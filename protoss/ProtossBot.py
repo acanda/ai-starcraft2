@@ -1,11 +1,11 @@
 import sc2
 from sc2 import run_game, maps, Race, Difficulty
 from sc2.constants import NEXUS, PROBE, PYLON, ASSIMILATOR, GATEWAY, CYBERNETICSCORE, STALKER, STARGATE, VOIDRAY, FORGE
-from sc2.constants import UpgradeId, PROTOSSAIRWEAPONSLEVEL1, PROTOSSAIRARMORSLEVEL1, PROTOSSSHIELDSLEVEL1, \
-    PROTOSSGROUNDWEAPONSLEVEL1, PROTOSSGROUNDARMORSLEVEL1
 from sc2.constants import EFFECT_CHRONOBOOSTENERGYCOST
 from sc2.player import Bot, Computer
 from sc2.unit import Unit
+import cv2
+import numpy as np
 
 
 class ProtossBot(sc2.BotAI):
@@ -20,13 +20,37 @@ class ProtossBot(sc2.BotAI):
         await self.build_pylons()
         await self.build_assimilators()
         await self.expand(iteration)
-#        await self.build_forge()
         await self.build_cybernetics_core()
-        await self.build_gateways(iteration)
-        await self.build_stargates(iteration)
+        await self.build_gateways()
+        await self.build_stargates()
         await self.train_force()
+        await self.draw_map()
         await self.attack()
-        await self.research()
+
+    async def draw_map(self):
+        game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
+
+        # unit: [size, (b, g, r)]
+        circles = {
+            NEXUS: [15, (0, 255, 0)],
+            STARGATE: [5, (255, 0, 0)],
+            PYLON: [3, (20, 235, 0)],
+            GATEWAY: [3, (200, 100, 0)],
+            CYBERNETICSCORE: [3, (150, 150, 0)],
+            ASSIMILATOR: [2, (55, 200, 0)],
+            VOIDRAY: [3, (255, 100, 0)],
+            PROBE: [1, (55, 200, 0)],
+        }
+
+        for unit_type in circles:
+            for unit in self.units(unit_type).ready:
+                pos = unit.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), circles[unit_type][0], circles[unit_type][1], -1)
+
+        flipped = cv2.flip(game_data, 0)
+        resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
+        cv2.imshow('Map', resized)
+        cv2.waitKey(1)
 
     async def train_probes(self):
         for nexus in self.units(NEXUS).ready.noqueue:
@@ -56,16 +80,9 @@ class ProtossBot(sc2.BotAI):
             if self.can_afford(NEXUS):
                 await self.expand_now(NEXUS)
 
-    async def build_forge(self):
+    async def build_gateways(self):
         if self.units(PYLON).ready.exists \
-                and not self.units(FORGE).ready.exists \
-                and not self.already_pending(FORGE) \
-                and self.can_afford(FORGE):
-            await self.build(FORGE, near=self.units(PYLON).ready.random)
-
-    async def build_gateways(self, iteration):
-        if self.units(PYLON).ready.exists \
-                and self.units(GATEWAY).ready.amount < self.units(NEXUS).ready.amount \
+                and self.units(GATEWAY).ready.amount < 1 \
                 and not self.already_pending(GATEWAY) \
                 and self.can_afford(GATEWAY):
             await self.build(GATEWAY, near=self.units(PYLON).ready.random)
@@ -77,7 +94,7 @@ class ProtossBot(sc2.BotAI):
                 and self.can_afford(CYBERNETICSCORE):
             await self.build(CYBERNETICSCORE, near=self.units(PYLON).ready.random)
 
-    async def build_stargates(self, iteration):
+    async def build_stargates(self):
         if self.units(CYBERNETICSCORE).ready.exists \
                 and self.units(STARGATE).ready.amount < self.units(NEXUS).ready.amount \
                 and not self.already_pending(STARGATE) \
@@ -85,13 +102,6 @@ class ProtossBot(sc2.BotAI):
             await self.build(STARGATE, near=self.units(PYLON).ready.random)
 
     async def train_force(self):
-        if self.units(CYBERNETICSCORE).ready.exists:
-            for gateway in self.units(GATEWAY).ready.noqueue:
-                if self.can_afford(STALKER) and self.supply_left >= 2 \
-                        and not self.units(STALKER).amount > self.units(VOIDRAY).amount:
-                    await self.do(gateway.train(STALKER))
-                    await self.chrono_boost(gateway)
-
         if self.units(STARGATE).ready.exists:
             for stargate in self.units(STARGATE).ready.noqueue:
                 if self.can_afford(VOIDRAY) and self.supply_left >= 4:
@@ -101,7 +111,6 @@ class ProtossBot(sc2.BotAI):
     async def attack(self):
         # { UNIT: [number to attack, number to defend] }
         attack_units = {
-            STALKER: [15, 3],
             VOIDRAY: [8, 2]
         }
 
@@ -125,30 +134,6 @@ class ProtossBot(sc2.BotAI):
             return self.known_enemy_structures.random
         else:
             return self.enemy_start_locations[0]
-
-    async def research(self):
-        for core in self.units(CYBERNETICSCORE).ready.noqueue:
-            if self.can_research(PROTOSSAIRWEAPONSLEVEL1):
-                await self.do(core.research(PROTOSSAIRWEAPONSLEVEL1))
-                await self.chrono_boost(core)
-            elif self.can_research(PROTOSSAIRARMORSLEVEL1):
-                await self.do(core.research(PROTOSSAIRARMORSLEVEL1))
-                await self.chrono_boost(core)
-
-        for forge in self.units(FORGE).ready.noqueue:
-            if self.can_research(PROTOSSSHIELDSLEVEL1):
-                await self.do(forge.research(PROTOSSSHIELDSLEVEL1))
-                await self.chrono_boost(forge)
-            elif self.can_research(PROTOSSGROUNDWEAPONSLEVEL1):
-                await self.do(forge.research(PROTOSSGROUNDWEAPONSLEVEL1))
-                await self.chrono_boost(forge)
-            elif self.can_research(PROTOSSGROUNDARMORSLEVEL1):
-                await self.do(forge.research(PROTOSSGROUNDARMORSLEVEL1))
-                await self.chrono_boost(forge)
-
-    def can_research(self, upgrade_id: UpgradeId):
-        return not self.already_pending_upgrade(upgrade_id) \
-               and self.can_afford(upgrade_id)
 
     async def chrono_boost(self, target: Unit):
         for nexus in self.units(NEXUS).ready:
