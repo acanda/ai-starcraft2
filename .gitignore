@@ -108,3 +108,4 @@ venv.bak/
 # Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio and WebStorm
 .idea/
 *.iml
+protoss/train_data/

@@ -1,5 +1,5 @@
 import sc2
-from sc2 import run_game, maps, Race, Difficulty, position
+from sc2 import run_game, maps, Race, Difficulty, position, Result
 from sc2.constants import NEXUS, PROBE, PYLON, ASSIMILATOR, GATEWAY, CYBERNETICSCORE, STALKER, STARGATE, VOIDRAY, FORGE, \
     OBSERVER, ROBOTICSFACILITY, EFFECT_CHRONOBOOSTENERGYCOST
 from sc2.player import Bot, Computer
@@ -7,6 +7,10 @@ from sc2.unit import Unit
 import cv2
 import numpy as np
 import random
+import time
+from pathlib import Path
+
+HEADLESS = False
 
 
 class ProtossBot(sc2.BotAI):
@@ -14,6 +18,8 @@ class ProtossBot(sc2.BotAI):
     def __init__(self):
         self.ITERATIONS_PER_MINUTE = 165
         self.MAX_WORKERS = 50
+        self.do_something_after = 0
+        self.train_data = []
 
     async def on_step(self, iteration):
         await self.scout()
@@ -27,8 +33,8 @@ class ProtossBot(sc2.BotAI):
         await self.build_gateways()
         await self.build_stargates()
         await self.train_force()
-        await self.draw_map()
-        await self.attack()
+        game_map = await self.draw_map()
+        await self.attack(iteration, game_map)
 
     async def scout(self):
         for scout in self.units(OBSERVER).idle:
@@ -97,7 +103,7 @@ class ProtossBot(sc2.BotAI):
         vespene_ratio = min(self.vespene / 1500, 1.0)
         population_ratio = min(self.supply_left / self.supply_cap, 1.0)
         plausible_supply = self.supply_cap / 200.0
-        military_weight = min(self.units(VOIDRAY).amount / (self.supply_cap - self.supply_left), 1.0)
+        military_weight = min(self.units(VOIDRAY).amount / (self.supply_cap - self.supply_left + 1), 1.0)
 
         cv2.line(game_data, (0, 19), (int(line_max * military_weight), 19), (250, 250, 200), 3)
         cv2.line(game_data, (0, 15), (int(line_max * plausible_supply), 15), (220, 200, 200), 3)
@@ -106,9 +112,13 @@ class ProtossBot(sc2.BotAI):
         cv2.line(game_data, (0, 3), (int(line_max * mineral_ratio), 3), (0, 255, 25), 3)
 
         flipped = cv2.flip(game_data, 0)
-        resized = cv2.resize(flipped, dsize=None, fx=3, fy=3, interpolation=cv2.INTER_NEAREST)
-        cv2.imshow('Map', resized)
-        cv2.waitKey(1)
+
+        if not HEADLESS:
+            resized = cv2.resize(flipped, dsize=None, fx=3, fy=3, interpolation=cv2.INTER_NEAREST)
+            cv2.imshow('Map', resized)
+            cv2.waitKey(1)
+
+        return flipped
 
     async def train_probes(self):
         for nexus in self.units(NEXUS).ready.noqueue:
@@ -179,26 +189,38 @@ class ProtossBot(sc2.BotAI):
                 await self.do(robotics.first.train(OBSERVER))
                 await self.chrono_boost(robotics.first)
 
-    async def attack(self):
-        # { UNIT: [number to attack, number to defend] }
-        attack_units = {
-            VOIDRAY: [8, 2]
-        }
+    async def attack(self, iteration, game_map):
+        if self.units(VOIDRAY).idle.exists:
+            choice = random.randrange(0, 4)
+            target = False
 
-        for u in attack_units:
-            idle_units = self.units(u).idle
-            if idle_units.amount >= attack_units[u][0]:
-                target = self.find_target()
-                for attacker in idle_units:
-                    await self.do(attacker.attack(target))
+            if iteration > self.do_something_after:
+                if choice == 0:
+                    # no attack
+                    wait = random.randrange(20, 165)
+                    self.do_something_after = iteration + wait
 
-            elif idle_units.amount >= attack_units[u][1] and self.known_enemy_units.amount > 0:
-                close_enemies = self.known_enemy_units \
-                    .filter(lambda e: self.units(NEXUS).ready.random.distance_to(e) < 25)
-                if close_enemies.exists:
-                    enemy = close_enemies.random
-                    for attacker in idle_units:
-                        await self.do(attacker.attack(enemy))
+                elif choice == 1:
+                    # attack_unit_closest_nexus
+                    if self.known_enemy_units.exists and self.units(NEXUS).exists:
+                        target = self.known_enemy_units.closest_to(self.units(NEXUS).first)
+
+                elif choice == 2:
+                    # attack enemy structures
+                    if self.known_enemy_structures.exists:
+                        target = random.choice(self.known_enemy_structures)
+
+                elif choice == 3:
+                    # attack enemy start location
+                    target = self.enemy_start_locations[0]
+
+                if target:
+                    for vr in self.units(VOIDRAY).idle:
+                        await self.do(vr.attack(target))
+
+                y = np.zeros(4)
+                y[choice] = 1
+                self.train_data.append([y, game_map])
 
     def find_target(self):
         if self.known_enemy_units.not_structure.exists:
@@ -215,8 +237,16 @@ class ProtossBot(sc2.BotAI):
                 break
 
 
+bot = ProtossBot()
 players = [
-    Bot(Race.Protoss, ProtossBot()),
-    Computer(Race.Terran, Difficulty.Hard)
+    Bot(Race.Protoss, bot),
+    Computer(Race.Terran, Difficulty.VeryEasy)
 ]
-run_game(maps.get("AbyssalReefLE"), players, realtime=False)
+result = run_game(maps.get("AbyssalReefLE"), players, realtime=False)
+
+if result == Result.Victory:
+    data_folder = Path("train_data").absolute()
+    data_folder.mkdir(parents=True, exist_ok=True)
+    data_file = data_folder / "{}.npy".format(str(int(time.time())))
+    print(f"Saving training data to {data_file}")
+    np.save(data_file, np.array(bot.train_data))
