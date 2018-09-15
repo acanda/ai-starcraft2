@@ -1,11 +1,12 @@
 import sc2
-from sc2 import run_game, maps, Race, Difficulty
-from sc2.constants import NEXUS, PROBE, PYLON, ASSIMILATOR, GATEWAY, CYBERNETICSCORE, STALKER, STARGATE, VOIDRAY, FORGE
-from sc2.constants import EFFECT_CHRONOBOOSTENERGYCOST
+from sc2 import run_game, maps, Race, Difficulty, position
+from sc2.constants import NEXUS, PROBE, PYLON, ASSIMILATOR, GATEWAY, CYBERNETICSCORE, STALKER, STARGATE, VOIDRAY, FORGE, \
+    OBSERVER, ROBOTICSFACILITY, EFFECT_CHRONOBOOSTENERGYCOST
 from sc2.player import Bot, Computer
 from sc2.unit import Unit
 import cv2
 import numpy as np
+import random
 
 
 class ProtossBot(sc2.BotAI):
@@ -15,40 +16,84 @@ class ProtossBot(sc2.BotAI):
         self.MAX_WORKERS = 50
 
     async def on_step(self, iteration):
+        await self.scout()
         await self.distribute_workers()
         await self.train_probes()
         await self.build_pylons()
         await self.build_assimilators()
         await self.expand(iteration)
         await self.build_cybernetics_core()
+        await self.build_robotics_facility()
         await self.build_gateways()
         await self.build_stargates()
         await self.train_force()
         await self.draw_map()
         await self.attack()
 
+    async def scout(self):
+        for scout in self.units(OBSERVER).idle:
+            location = self.random_location_variance(self.enemy_start_locations[0])
+            await self.do(scout.move(location))
+
+    def random_location_variance(self, enemy_start_location):
+        x = enemy_start_location[0]
+        y = enemy_start_location[1]
+        x += ((random.randrange(-20, 20)) / 100) * enemy_start_location[0]
+        y += ((random.randrange(-20, 20)) / 100) * enemy_start_location[1]
+        x = min(max(0, x), self.game_info.map_size[0])
+        y = min(max(0, y), self.game_info.map_size[1])
+        return position.Point2(position.Pointlike((x, y)))
+
     async def draw_map(self):
         game_data = np.zeros((self.game_info.map_size[1], self.game_info.map_size[0], 3), np.uint8)
 
         # unit: [size, (b, g, r)]
-        circles = {
+        structures = {
             NEXUS: [15, (0, 255, 0)],
             STARGATE: [5, (255, 0, 0)],
+            ROBOTICSFACILITY: [5, (215, 155, 0)],
             PYLON: [3, (20, 235, 0)],
             GATEWAY: [3, (200, 100, 0)],
             CYBERNETICSCORE: [3, (150, 150, 0)],
             ASSIMILATOR: [2, (55, 200, 0)],
+        }
+        army = {
             VOIDRAY: [3, (255, 100, 0)],
             PROBE: [1, (55, 200, 0)],
         }
 
-        for unit_type in circles:
+        for unit_type in structures:
             for unit in self.units(unit_type).ready:
                 pos = unit.position
-                cv2.circle(game_data, (int(pos[0]), int(pos[1])), circles[unit_type][0], circles[unit_type][1], -1)
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), structures[unit_type][0], structures[unit_type][1],
+                           -1)
+
+        main_base_names = ["nexus", "supplydepot", "hatchery"]
+        for enemy_building in self.known_enemy_structures:
+            pos = enemy_building.position
+            if enemy_building.name.lower() in main_base_names:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 15, (0, 0, 255), -1)
+            else:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 5, (200, 50, 212), -1)
+
+        for enemy_unit in self.known_enemy_units.not_structure:
+            worker_names = ["probe",
+                            "scv",
+                            "drone"]
+            # if that unit is a PROBE, SCV, or DRONE... it's a worker
+            pos = enemy_unit.position
+            if enemy_unit.name.lower() in worker_names:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1, (55, 0, 155), -1)
+            else:
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3, (50, 0, 215), -1)
+
+        for unit_type in army:
+            for unit in self.units(unit_type).ready:
+                pos = unit.position
+                cv2.circle(game_data, (int(pos[0]), int(pos[1])), army[unit_type][0], army[unit_type][1], -1)
 
         flipped = cv2.flip(game_data, 0)
-        resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
+        resized = cv2.resize(flipped, dsize=None, fx=3, fy=3, interpolation=cv2.INTER_NEAREST)
         cv2.imshow('Map', resized)
         cv2.waitKey(1)
 
@@ -94,6 +139,13 @@ class ProtossBot(sc2.BotAI):
                 and self.can_afford(CYBERNETICSCORE):
             await self.build(CYBERNETICSCORE, near=self.units(PYLON).ready.random)
 
+    async def build_robotics_facility(self):
+        if self.units(CYBERNETICSCORE).ready.exists \
+                and not self.units(ROBOTICSFACILITY).ready.exists \
+                and not self.already_pending(ROBOTICSFACILITY) \
+                and self.can_afford(ROBOTICSFACILITY):
+            await self.build(ROBOTICSFACILITY, near=self.units(PYLON).ready.random)
+
     async def build_stargates(self):
         if self.units(CYBERNETICSCORE).ready.exists \
                 and self.units(STARGATE).ready.amount < self.units(NEXUS).ready.amount \
@@ -108,6 +160,12 @@ class ProtossBot(sc2.BotAI):
                     await self.do(stargate.train(VOIDRAY))
                     await self.chrono_boost(stargate)
 
+        if not self.units(OBSERVER).exists:
+            robotics = self.units(ROBOTICSFACILITY).ready.noqueue
+            if robotics.exists and self.can_afford(OBSERVER) and self.supply_left >= 1:
+                await self.do(robotics.first.train(OBSERVER))
+                await self.chrono_boost(robotics.first)
+
     async def attack(self):
         # { UNIT: [number to attack, number to defend] }
         attack_units = {
@@ -117,21 +175,23 @@ class ProtossBot(sc2.BotAI):
         for u in attack_units:
             idle_units = self.units(u).idle
             if idle_units.amount >= attack_units[u][0]:
+                target = self.find_target()
                 for attacker in idle_units:
-                    await self.do(attacker.attack(self.find_target()))
+                    await self.do(attacker.attack(target))
 
             elif idle_units.amount >= attack_units[u][1] and self.known_enemy_units.amount > 0:
                 close_enemies = self.known_enemy_units \
-                    .filter(lambda enemy: self.units(NEXUS).ready.random.distance_to(enemy) < 25)
+                    .filter(lambda e: self.units(NEXUS).ready.random.distance_to(e) < 25)
                 if close_enemies.exists:
+                    enemy = close_enemies.random
                     for attacker in idle_units:
-                        await self.do(attacker.attack(close_enemies.random))
+                        await self.do(attacker.attack(enemy))
 
     def find_target(self):
-        if len(self.known_enemy_units) > 0:
-            return self.known_enemy_units.random
-        elif len(self.known_enemy_structures) > 0:
-            return self.known_enemy_structures.random
+        if self.known_enemy_units.not_structure.exists:
+            return self.known_enemy_units.not_structure.first
+        elif self.known_enemy_structures.exists:
+            return self.known_enemy_structures.first
         else:
             return self.enemy_start_locations[0]
 
