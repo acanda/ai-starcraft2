@@ -92,6 +92,19 @@ class ProtossBot(sc2.BotAI):
                 pos = unit.position
                 cv2.circle(game_data, (int(pos[0]), int(pos[1])), army[unit_type][0], army[unit_type][1], -1)
 
+        line_max = 50
+        mineral_ratio = min(self.minerals / 1500, 1.0)
+        vespene_ratio = min(self.vespene / 1500, 1.0)
+        population_ratio = min(self.supply_left / self.supply_cap, 1.0)
+        plausible_supply = self.supply_cap / 200.0
+        military_weight = min(self.units(VOIDRAY).amount / (self.supply_cap - self.supply_left), 1.0)
+
+        cv2.line(game_data, (0, 19), (int(line_max * military_weight), 19), (250, 250, 200), 3)
+        cv2.line(game_data, (0, 15), (int(line_max * plausible_supply), 15), (220, 200, 200), 3)
+        cv2.line(game_data, (0, 11), (int(line_max * population_ratio), 11), (150, 150, 150), 3)
+        cv2.line(game_data, (0, 7), (int(line_max * vespene_ratio), 7), (210, 200, 0), 3)
+        cv2.line(game_data, (0, 3), (int(line_max * mineral_ratio), 3), (0, 255, 25), 3)
+
         flipped = cv2.flip(game_data, 0)
         resized = cv2.resize(flipped, dsize=None, fx=3, fy=3, interpolation=cv2.INTER_NEAREST)
         cv2.imshow('Map', resized)
