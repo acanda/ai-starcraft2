@@ -9,17 +9,22 @@ import numpy as np
 import random
 import time
 from pathlib import Path
+import keras
 
 HEADLESS = False
 
 
 class ProtossBot(sc2.BotAI):
 
-    def __init__(self):
+    def __init__(self, use_model=False):
         self.ITERATIONS_PER_MINUTE = 165
         self.MAX_WORKERS = 50
         self.do_something_after = 0
         self.train_data = []
+        self.use_model = use_model
+        if use_model:
+            print("Using CNN model")
+            self.model = keras.models.load_model("model/BasicCNN-30-epochs-0.0001-LR-4.2")
 
     async def on_step(self, iteration):
         await self.scout()
@@ -191,7 +196,19 @@ class ProtossBot(sc2.BotAI):
 
     async def attack(self, iteration, game_map):
         if self.units(VOIDRAY).idle.exists:
-            choice = random.randrange(0, 4)
+
+            if self.use_model:
+                prediction = self.model.predict([game_map.reshape([-1, 176, 200, 3])])
+                choice = np.argmax(prediction[0])
+            else:
+                choice = random.randrange(0, 4)
+
+            choice_dict = {0: "No Attack!",
+                           1: "Attack close to our nexus!",
+                           2: "Attack Enemy Structure!",
+                           3: "Attack Eneemy Start!"}
+            print(f"Choice #{choice}: {choice_dict[choice]}")
+
             target = False
 
             if iteration > self.do_something_after:
@@ -237,10 +254,10 @@ class ProtossBot(sc2.BotAI):
                 break
 
 
-bot = ProtossBot()
+bot = ProtossBot(use_model=True)
 players = [
     Bot(Race.Protoss, bot),
-    Computer(Race.Terran, Difficulty.VeryEasy)
+    Computer(Race.Terran, Difficulty.Hard)
 ]
 result = run_game(maps.get("AbyssalReefLE"), players, realtime=False)
 
