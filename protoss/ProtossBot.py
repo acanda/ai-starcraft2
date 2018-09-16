@@ -17,22 +17,23 @@ HEADLESS = False
 class ProtossBot(sc2.BotAI):
 
     def __init__(self, use_model=False):
-        self.ITERATIONS_PER_MINUTE = 165
         self.MAX_WORKERS = 50
         self.do_something_after = 0
         self.train_data = []
         self.use_model = use_model
         if use_model:
-            print("Using CNN model")
-            self.model = keras.models.load_model("model/BasicCNN-30-epochs-0.0001-LR-4.2")
+            model_file = "BasicCNN-30-epochs-0.0001-LR-4.2"
+            print(f"Using CNN model {model_file}")
+            self.model = keras.models.load_model(f"model/{model_file}")
 
     async def on_step(self, iteration):
+        time = (self.state.game_loop/22.4) / 60
         await self.scout()
         await self.distribute_workers()
         await self.train_probes()
         await self.build_pylons()
         await self.build_assimilators()
-        await self.expand(iteration)
+        await self.expand(time)
         await self.build_cybernetics_core()
         await self.build_robotics_facility()
         await self.build_gateways()
@@ -79,7 +80,7 @@ class ProtossBot(sc2.BotAI):
                 cv2.circle(game_data, (int(pos[0]), int(pos[1])), structures[unit_type][0], structures[unit_type][1],
                            -1)
 
-        main_base_names = ["nexus", "supplydepot", "hatchery"]
+        main_base_names = ["nexus", "commandcenter", "hatchery"]
         for enemy_building in self.known_enemy_structures:
             pos = enemy_building.position
             if enemy_building.name.lower() in main_base_names:
@@ -147,9 +148,9 @@ class ProtossBot(sc2.BotAI):
                     if worker is not None:
                         await self.do(worker.build(ASSIMILATOR, vaspene))
 
-    async def expand(self, iteration):
+    async def expand(self, time):
         nexuses = self.units(NEXUS).amount
-        if 0 < nexuses < min(5, max(3, iteration / self.ITERATIONS_PER_MINUTE)):
+        if 0 < nexuses < min(5, max(3, time)):
             if self.can_afford(NEXUS):
                 await self.expand_now(NEXUS)
 
@@ -194,7 +195,7 @@ class ProtossBot(sc2.BotAI):
                 await self.do(robotics.first.train(OBSERVER))
                 await self.chrono_boost(robotics.first)
 
-    async def attack(self, iteration, game_map):
+    async def attack(self, time, game_map):
         if self.units(VOIDRAY).idle.exists:
 
             if self.use_model:
@@ -211,11 +212,11 @@ class ProtossBot(sc2.BotAI):
 
             target = False
 
-            if iteration > self.do_something_after:
+            if time > self.do_something_after:
                 if choice == 0:
                     # no attack
-                    wait = random.randrange(20, 165)
-                    self.do_something_after = iteration + wait
+                    wait = random.randrange(7, 100) / 100
+                    self.do_something_after = time + wait
 
                 elif choice == 1:
                     # attack_unit_closest_nexus
@@ -257,7 +258,7 @@ class ProtossBot(sc2.BotAI):
 bot = ProtossBot(use_model=True)
 players = [
     Bot(Race.Protoss, bot),
-    Computer(Race.Terran, Difficulty.Hard)
+    Computer(Race.Terran, Difficulty.Medium)
 ]
 result = run_game(maps.get("AbyssalReefLE"), players, realtime=False)
 
