@@ -109,3 +109,5 @@ venv.bak/
 .idea/
 *.iml
 protoss/train_data/
+protoss/logs/
+protoss/model/
